@@ -8,13 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"mime/multipart"
 	"net"
 	"os"
 	"sync"
 	"time"
 
 	"github.com/valyala/bytebufferpool"
+	"github.com/valyala/fasthttp/zzz/mime/multipart"
 )
 
 var (
@@ -977,7 +977,7 @@ func (req *Request) MultipartForm() (*multipart.Form, error) {
 		}
 
 		mr := multipart.NewReader(bodyStream, req.multipartFormBoundary)
-		req.multipartForm, err = mr.ReadForm(8 * 1024)
+		req.multipartForm, err = mr.ReadForm(req.Header.DoHeaderBodyCheck, 8*1024)
 		if err != nil {
 			return nil, fmt.Errorf("cannot read multipart/form-data body: %w", err)
 		}
@@ -992,7 +992,7 @@ func (req *Request) MultipartForm() (*multipart.Form, error) {
 			return nil, fmt.Errorf("unsupported Content-Encoding: %q", ce)
 		}
 
-		req.multipartForm, err = readMultipartForm(bytes.NewReader(body), req.multipartFormBoundary, len(body), len(body))
+		req.multipartForm, err = readMultipartForm(req.Header.DoHeaderBodyCheck, bytes.NewReader(body), req.multipartFormBoundary, len(body), len(body))
 		if err != nil {
 			return nil, err
 		}
@@ -1060,7 +1060,7 @@ func WriteMultipartForm(w io.Writer, f *multipart.Form, boundary string) error {
 	return nil
 }
 
-func readMultipartForm(r io.Reader, boundary string, size, maxInMemoryFileSize int) (*multipart.Form, error) {
+func readMultipartForm(doCheck func(body []byte, form *multipart.Form) (fail bool), r io.Reader, boundary string, size, maxInMemoryFileSize int) (*multipart.Form, error) {
 	// Do not care about memory allocations here, since they are tiny
 	// compared to multipart data (aka multi-MB files) usually sent
 	// in multipart/form-data requests.
@@ -1070,7 +1070,7 @@ func readMultipartForm(r io.Reader, boundary string, size, maxInMemoryFileSize i
 	}
 	lr := io.LimitReader(r, int64(size))
 	mr := multipart.NewReader(lr, boundary)
-	f, err := mr.ReadForm(int64(maxInMemoryFileSize))
+	f, err := mr.ReadForm(doCheck, int64(maxInMemoryFileSize))
 	if err != nil {
 		return nil, fmt.Errorf("cannot read multipart/form-data body: %w", err)
 	}
@@ -1251,7 +1251,7 @@ func (req *Request) ContinueReadBody(r *bufio.Reader, maxBodySize int, preParseM
 			// is streamed into temporary files if file size exceeds defaultMaxInMemoryFileSize.
 			req.multipartFormBoundary = string(req.Header.MultipartFormBoundary())
 			if len(req.multipartFormBoundary) > 0 && len(req.Header.peek(strContentEncoding)) == 0 {
-				req.multipartForm, err = readMultipartForm(r, req.multipartFormBoundary, contentLength, defaultMaxInMemoryFileSize)
+				req.multipartForm, err = readMultipartForm(req.Header.DoHeaderBodyCheck, r, req.multipartFormBoundary, contentLength, defaultMaxInMemoryFileSize)
 				if err != nil {
 					req.Reset()
 				}
@@ -1330,7 +1330,7 @@ func (req *Request) ContinueReadBodyStream(r *bufio.Reader, maxBodySize int, pre
 			// is streamed into temporary files if file size exceeds defaultMaxInMemoryFileSize.
 			req.multipartFormBoundary = b2s(req.Header.MultipartFormBoundary())
 			if len(req.multipartFormBoundary) > 0 && len(req.Header.peek(strContentEncoding)) == 0 {
-				req.multipartForm, err = readMultipartForm(r, req.multipartFormBoundary, contentLength, defaultMaxInMemoryFileSize)
+				req.multipartForm, err = readMultipartForm(req.Header.DoHeaderBodyCheck, r, req.multipartFormBoundary, contentLength, defaultMaxInMemoryFileSize)
 				if err != nil {
 					req.Reset()
 				}
@@ -1356,13 +1356,13 @@ func (req *Request) ContinueReadBodyStream(r *bufio.Reader, maxBodySize int, pre
 	bodyBuf.Reset()
 	bodyBuf.B, err = readBodyWithStreaming(r, contentLength, maxBodySize, bodyBuf.B)
 	if err != nil {
-		if err == ErrBodyTooLarge {
+		if errors.Is(err, ErrBodyTooLarge) {
 			req.Header.SetContentLength(contentLength)
 			req.body = bodyBuf
 			req.bodyStream = acquireRequestStream(bodyBuf, r, &req.Header)
 			return nil
 		}
-		if err == errChunkedStream {
+		if errors.Is(err, errChunkedStream) {
 			req.body = bodyBuf
 			req.bodyStream = acquireRequestStream(bodyBuf, r, &req.Header)
 			return nil

@@ -8,13 +8,14 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"mime/multipart"
 	"net"
 	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/valyala/fasthttp/zzz/mime/multipart"
 )
 
 var errNoCertOrKeyProvided = errors.New("cert or key has not provided")
@@ -408,6 +409,9 @@ type Server struct {
 	//
 	// NetHttpFormValueFunc gives a FormValueFunc func implementation that is consistent with net/http.
 	FormValueFunc FormValueFunc
+
+	// 请求头检测：用于上传文件
+	GetBodyHeaderCheck func(uri []byte) multipart.BodyHeaderCheck // @Ben
 
 	nextProtos map[string]ServeHandler
 
@@ -2029,7 +2033,7 @@ func (s *Server) ServeConn(c net.Conn) error {
 
 	atomic.AddUint32(&s.concurrency, ^uint32(0))
 
-	if err != errHijacked {
+	if !errors.Is(err, errHijacked) {
 		err1 := c.Close()
 		s.setState(c, StateClosed)
 		if err == nil {
@@ -2191,6 +2195,10 @@ func (s *Server) serveConn(c net.Conn) (err error) {
 		ctx.Request.secureErrorLogMessage = s.SecureErrorLogMessage
 		ctx.Response.secureErrorLogMessage = s.SecureErrorLogMessage
 
+		if s.GetBodyHeaderCheck != nil { // @Ben
+			ctx.Request.Header.headerChk = s.GetBodyHeaderCheck(ctx.RequestURI())
+		}
+
 		if err == nil {
 			s.setState(c, StateActive)
 
@@ -2218,7 +2226,7 @@ func (s *Server) serveConn(c net.Conn) (err error) {
 			// outgoing buffer first so it doesn't have to wait.
 			if bw != nil && bw.Buffered() > 0 {
 				err = ctx.Request.Header.readLoop(br, false)
-				if err == errNeedMore {
+				if errors.Is(err, errNeedMore) {
 					err = bw.Flush()
 					if err != nil {
 						break

@@ -9,6 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/valyala/fasthttp/zzz/mime/multipart"
 )
 
 const (
@@ -92,6 +94,8 @@ type RequestHeader struct {
 	// stores an immutable copy of headers as they were received from the
 	// wire.
 	rawHeaders []byte
+
+	headerChk multipart.BodyHeaderCheck // @Ben
 }
 
 // SetContentRange sets 'Content-Range: bytes startPos-endPos/contentLength'
@@ -2000,7 +2004,7 @@ func (h *ResponseHeader) Cookie(cookie *Cookie) bool {
 	if v == nil {
 		return false
 	}
-	cookie.ParseBytes(v) //nolint:errcheck
+	_ = cookie.ParseBytes(v) //nolint:errcheck
 	return true
 }
 
@@ -2014,7 +2018,7 @@ func (h *ResponseHeader) Read(r *bufio.Reader) error {
 		if err == nil {
 			return nil
 		}
-		if err != errNeedMore {
+		if !errors.Is(err, errNeedMore) {
 			h.resetSkipNormalize()
 			return err
 		}
@@ -2036,7 +2040,7 @@ func (h *ResponseHeader) tryRead(r *bufio.Reader, n int) error {
 		}
 
 		// This is for go 1.6 bug. See https://github.com/golang/go/issues/14121 .
-		if err == bufio.ErrBufferFull {
+		if errors.Is(err, bufio.ErrBufferFull) {
 			if h.secureErrorLogMessage {
 				return &ErrSmallBuffer{
 					error: fmt.Errorf("error when reading response headers"),
@@ -2068,7 +2072,7 @@ func (h *ResponseHeader) ReadTrailer(r *bufio.Reader) error {
 		if err == nil {
 			return nil
 		}
-		if err != errNeedMore {
+		if !errors.Is(err, errNeedMore) {
 			return err
 		}
 		n = r.Buffered() + 1
@@ -2088,7 +2092,7 @@ func (h *ResponseHeader) tryReadTrailer(r *bufio.Reader, n int) error {
 		}
 
 		// This is for go 1.6 bug. See https://github.com/golang/go/issues/14121 .
-		if err == bufio.ErrBufferFull {
+		if errors.Is(err, bufio.ErrBufferFull) {
 			if h.secureErrorLogMessage {
 				return &ErrSmallBuffer{
 					error: fmt.Errorf("error when reading response trailer"),
@@ -2114,7 +2118,7 @@ func (h *ResponseHeader) tryReadTrailer(r *bufio.Reader, n int) error {
 }
 
 func headerError(typ string, err, errParse error, b []byte, secureErrorLogMessage bool) error {
-	if errParse != errNeedMore {
+	if !errors.Is(errParse, errNeedMore) {
 		return headerErrorMsg(typ, errParse, b, secureErrorLogMessage)
 	}
 	if err == nil {
@@ -2127,7 +2131,7 @@ func headerError(typ string, err, errParse error, b []byte, secureErrorLogMessag
 		return io.EOF
 	}
 
-	if err != bufio.ErrBufferFull {
+	if !errors.Is(err, bufio.ErrBufferFull) {
 		return headerErrorMsg(typ, err, b, secureErrorLogMessage)
 	}
 	return &ErrSmallBuffer{
@@ -2159,7 +2163,7 @@ func (h *RequestHeader) readLoop(r *bufio.Reader, waitForMore bool) error {
 		if err == nil {
 			return nil
 		}
-		if !waitForMore || err != errNeedMore {
+		if !waitForMore || !errors.Is(err, errNeedMore) {
 			h.resetSkipNormalize()
 			return err
 		}
@@ -2177,7 +2181,7 @@ func (h *RequestHeader) ReadTrailer(r *bufio.Reader) error {
 		if err == nil {
 			return nil
 		}
-		if err != errNeedMore {
+		if !errors.Is(err, errNeedMore) {
 			return err
 		}
 		n = r.Buffered() + 1
@@ -2197,7 +2201,7 @@ func (h *RequestHeader) tryReadTrailer(r *bufio.Reader, n int) error {
 		}
 
 		// This is for go 1.6 bug. See https://github.com/golang/go/issues/14121 .
-		if err == bufio.ErrBufferFull {
+		if errors.Is(err, bufio.ErrBufferFull) {
 			if h.secureErrorLogMessage {
 				return &ErrSmallBuffer{
 					error: fmt.Errorf("error when reading request trailer"),
@@ -2235,7 +2239,7 @@ func (h *RequestHeader) tryRead(r *bufio.Reader, n int) error {
 		}
 
 		// This is for go 1.6 bug. See https://github.com/golang/go/issues/14121 .
-		if err == bufio.ErrBufferFull {
+		if errors.Is(err, bufio.ErrBufferFull) {
 			return &ErrSmallBuffer{
 				error: fmt.Errorf("error when reading request headers: %w (n=%d, r.Buffered()=%d)", errSmallBuffer, n, r.Buffered()),
 			}
