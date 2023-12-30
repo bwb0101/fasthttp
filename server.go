@@ -412,6 +412,7 @@ type Server struct {
 
 	// 请求头检测：用于上传文件
 	GetBodyHeaderCheck func(uri []byte) multipart.BodyHeaderCheck // @Ben
+	AuthValidate       func(ctx *RequestCtx) error                // @Ben
 
 	nextProtos map[string]ServeHandler
 
@@ -2195,10 +2196,6 @@ func (s *Server) serveConn(c net.Conn) (err error) {
 		ctx.Request.secureErrorLogMessage = s.SecureErrorLogMessage
 		ctx.Response.secureErrorLogMessage = s.SecureErrorLogMessage
 
-		if s.GetBodyHeaderCheck != nil { // @Ben
-			ctx.Request.Header.headerChk = s.GetBodyHeaderCheck(ctx.RequestURI())
-		}
-
 		if err == nil {
 			s.setState(c, StateActive)
 
@@ -2261,11 +2258,19 @@ func (s *Server) serveConn(c net.Conn) (err error) {
 						writeTimeout = s.WriteTimeout
 					}
 				}
-				// read body
-				if s.StreamRequestBody {
-					err = ctx.Request.readBodyStream(br, maxRequestBodySize, s.GetOnly, !s.DisablePreParseMultipartForm)
-				} else {
-					err = ctx.Request.readLimitBody(br, maxRequestBodySize, s.GetOnly, !s.DisablePreParseMultipartForm)
+				if s.AuthValidate != nil {
+					err = s.AuthValidate(ctx)
+				}
+				if err == nil {
+					if s.GetBodyHeaderCheck != nil { // @Ben
+						ctx.Request.Header.headerChk = s.GetBodyHeaderCheck(ctx.Request.Header.requestURI)
+					}
+					// read body
+					if s.StreamRequestBody {
+						err = ctx.Request.readBodyStream(br, maxRequestBodySize, s.GetOnly, !s.DisablePreParseMultipartForm)
+					} else {
+						err = ctx.Request.readLimitBody(br, maxRequestBodySize, s.GetOnly, !s.DisablePreParseMultipartForm)
+					}
 				}
 			}
 

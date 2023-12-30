@@ -7,12 +7,11 @@ package multipart
 import (
 	"bytes"
 	"errors"
-	"internal/godebug"
+	// "internal/godebug"
 	"io"
 	"math"
 	"net/textproto"
 	"os"
-	"strconv"
 )
 
 // ErrMessageTooLarge is returned by ReadForm if the message form
@@ -29,16 +28,16 @@ var ErrMessageTooLarge = errors.New("multipart: message too large")
 // disk in temporary files.
 // It returns ErrMessageTooLarge if all non-file parts can't be stored in
 // memory.
-func (r *Reader) ReadForm(doCheck func(body []byte, form *Form) (fail bool), maxMemory int64) (*Form, error) {
+func (r *Reader) ReadForm(doCheck BodyHeaderCheck, maxMemory int64) (*Form, error) {
 	return r.readForm(doCheck, maxMemory)
 }
 
 var (
-	multipartFiles    = godebug.New("#multipartfiles") // TODO: document and remove #
-	multipartMaxParts = godebug.New("multipartmaxparts")
+// multipartFiles    = godebug.New("#multipartfiles") // TODO: document and remove #
+// multipartMaxParts = godebug.New("multipartmaxparts")
 )
 
-func (r *Reader) readForm(doCheckFail func(body []byte, form *Form) (fail bool), maxMemory int64) (_ *Form, err error) {
+func (r *Reader) readForm(doCheck BodyHeaderCheck, maxMemory int64) (_ *Form, err error) {
 	form := &Form{make(map[string][]string), make(map[string][]*FileHeader)}
 	var (
 		file    *os.File
@@ -46,17 +45,17 @@ func (r *Reader) readForm(doCheckFail func(body []byte, form *Form) (fail bool),
 	)
 	numDiskFiles := 0
 	combineFiles := true
-	if multipartFiles.Value() == "distinct" {
-		combineFiles = false
-		// multipartFiles.IncNonDefault() // TODO: uncomment after documenting
-	}
+	// if multipartFiles.Value() == "distinct" {
+	// 	combineFiles = false
+	// 	// multipartFiles.IncNonDefault() // TODO: uncomment after documenting
+	// }
 	maxParts := 1000
-	if s := multipartMaxParts.Value(); s != "" {
-		if v, err := strconv.Atoi(s); err == nil && v >= 0 {
-			maxParts = v
-			multipartMaxParts.IncNonDefault()
-		}
-	}
+	// if s := multipartMaxParts.Value(); s != "" {
+	// 	if v, err := strconv.Atoi(s); err == nil && v >= 0 {
+	// 		maxParts = v
+	// 		multipartMaxParts.IncNonDefault()
+	// 	}
+	// }
 	maxHeaders := maxMIMEHeaders()
 
 	defer func() {
@@ -73,7 +72,7 @@ func (r *Reader) readForm(doCheckFail func(body []byte, form *Form) (fail bool),
 			}
 		}
 		if err != nil {
-			_ = form.RemoveAll()
+			form.RemoveAll()
 			if file != nil {
 				os.Remove(file.Name())
 			}
@@ -105,15 +104,8 @@ func (r *Reader) readForm(doCheckFail func(body []byte, form *Form) (fail bool),
 			maxMemoryBytes = math.MaxInt64
 		}
 	}
-	// Multiple values for the same key (one map entry, longer slice) are cheaper
-	// than the same number of values for different keys (many map entries), but
-	// using a consistent per-value cost for overhead is simpler.
-	const mapEntryOverhead = 200
-	// file, store in memory or on disk
-	const fileHeaderSize = 100
-	var filePart []*Part
-	//
-	for { // @Ben 先读值，后读file
+	var copyBuf []byte
+	for {
 		p, err := r.nextPart(false, maxMemoryBytes, maxHeaders)
 		if err == io.EOF {
 			break
@@ -132,6 +124,10 @@ func (r *Reader) readForm(doCheckFail func(body []byte, form *Form) (fail bool),
 		}
 		filename := p.FileName()
 
+		// Multiple values for the same key (one map entry, longer slice) are cheaper
+		// than the same number of values for different keys (many map entries), but
+		// using a consistent per-value cost for overhead is simpler.
+		const mapEntryOverhead = 200
 		maxMemoryBytes -= int64(len(name))
 		maxMemoryBytes -= mapEntryOverhead
 		if maxMemoryBytes < 0 {
@@ -155,6 +151,9 @@ func (r *Reader) readForm(doCheckFail func(body []byte, form *Form) (fail bool),
 			form.Value[name] = append(form.Value[name], b.String())
 			continue
 		}
+
+		// file, store in memory or on disk
+		const fileHeaderSize = 100
 		maxMemoryBytes -= mimeHeaderSize(p.Header)
 		maxMemoryBytes -= mapEntryOverhead
 		maxMemoryBytes -= fileHeaderSize
@@ -164,31 +163,19 @@ func (r *Reader) readForm(doCheckFail func(body []byte, form *Form) (fail bool),
 		for _, v := range p.Header {
 			maxHeaders -= int64(len(v))
 		}
-		filePart = append(filePart, p)
-	}
-	// 读取文件
-	var copyBuf []byte
-	for _, p := range filePart {
-		if maxMemoryBytes < 0 {
-			return nil, ErrMessageTooLarge
-		}
 		fh := &FileHeader{
-			Filename: p.FileName(),
+			Filename: filename,
 			Header:   p.Header,
 		}
-		var b bytes.Buffer
 		n, err := io.CopyN(&b, p, maxFileMemoryBytes+1)
 		if err != nil && err != io.EOF {
 			return nil, err
 		}
-
-		if doCheckFail != nil { // 只检测一次
-			if doCheckFail(b.Bytes()[0:2048], form) {
-				return nil, ErrBodyHeaderCheckFail
+		if doCheck != nil { // 文件key设置在最后，需要先读取其他value才能在func里正确判断 @Ben
+			if err = doCheck(b.Bytes()[:1024], fh.Filename, form); err != nil {
+				return nil, err
 			}
-			doCheckFail = nil
 		}
-
 		if n > maxFileMemoryBytes {
 			if file == nil {
 				file, err = os.CreateTemp(r.tempDir, "multipart-")
@@ -225,9 +212,9 @@ func (r *Reader) readForm(doCheckFail func(body []byte, form *Form) (fail bool),
 			maxFileMemoryBytes -= n
 			maxMemoryBytes -= n
 		}
-		name := p.FormName()
 		form.File[name] = append(form.File[name], fh)
 	}
+
 	return form, nil
 }
 

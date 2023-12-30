@@ -7,8 +7,4 @@
 
 package multipart
 
-import "errors"
-
-type BodyHeaderCheck func(body []byte, form *Form) (fail bool) // @Ben
-
-var ErrBodyHeaderCheckFail = errors.New("message header does not meet requirements")
+type BodyHeaderCheck func(body []byte, fileName string, form *Form) (err error) // @Ben

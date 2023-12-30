@@ -31,13 +31,12 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
-	"internal/godebug"
+	// "internal/godebug"
 	"io"
 	"mime"
 	"mime/quotedprintable"
 	"net/textproto"
 	"path/filepath"
-	"strconv"
 	"strings"
 )
 
@@ -350,15 +349,15 @@ const maxMIMEHeaderSize = 10 << 20
 // multipartMaxHeaders is the maximum number of header entries NextPart will return,
 // as well as the maximum combined total of header entries Reader.ReadForm will return
 // in FileHeaders.
-var multipartMaxHeaders = godebug.New("multipartmaxheaders")
+// var multipartMaxHeaders = godebug.New("multipartmaxheaders")
 
 func maxMIMEHeaders() int64 {
-	if s := multipartMaxHeaders.Value(); s != "" {
-		if v, err := strconv.ParseInt(s, 10, 64); err == nil && v >= 0 {
-			multipartMaxHeaders.IncNonDefault()
-			return v
-		}
-	}
+	// if s := multipartMaxHeaders.Value(); s != "" {
+	// 	if v, err := strconv.ParseInt(s, 10, 64); err == nil && v >= 0 {
+	// 		multipartMaxHeaders.IncNonDefault()
+	// 		return v
+	// 	}
+	// }
 	return 10000
 }
 
@@ -383,7 +382,7 @@ func (r *Reader) NextRawPart() (*Part, error) {
 
 func (r *Reader) nextPart(rawPart bool, maxMIMEHeaderSize, maxMIMEHeaders int64) (*Part, error) {
 	if r.currentPart != nil {
-		r.currentPart.Close()
+		_ = r.currentPart.Close()
 	}
 	if string(r.dashBoundary) == "--" {
 		return nil, fmt.Errorf("multipart: boundary is empty")
