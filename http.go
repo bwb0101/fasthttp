@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/valyala/bytebufferpool"
+	"github.com/valyala/fasthttp/zzz"
 	"github.com/valyala/fasthttp/zzz/mime/multipart"
 )
 
@@ -1072,6 +1073,9 @@ func readMultipartForm(doCheck multipart.BodyHeaderCheck, r io.Reader, boundary 
 	mr := multipart.NewReader(lr, boundary)
 	f, err := mr.ReadForm(doCheck, int64(maxInMemoryFileSize))
 	if err != nil {
+		if _, ok := err.(*zzz.FastHttpMyHeaderCheckError); ok { // @Ben 忽略业务预先处理的错误
+			return nil, err
+		}
 		return nil, fmt.Errorf("cannot read multipart/form-data body: %w", err)
 	}
 	return f, nil
