@@ -1301,7 +1301,7 @@ func (req *Request) ReadBody(r *bufio.Reader, contentLength int, maxBodySize int
 	case contentLength >= 0:
 		bodyBuf.B, err = readBody(r, contentLength, maxBodySize, bodyBuf.B)
 	case contentLength == -1:
-		bodyBuf.B, err = readBodyChunked(r, maxBodySize, bodyBuf.B)
+		bodyBuf.B, err = req.readBodyChunked2(r, maxBodySize, bodyBuf.B) // @Ben 尝试解析成form
 		if err == nil && len(bodyBuf.B) == 0 {
 			req.Header.SetContentLength(0)
 		}
@@ -2202,6 +2202,9 @@ func readBodyWithStreaming(r *bufio.Reader, contentLength int, maxBodySize int, 
 }
 
 func readBodyIdentity(r *bufio.Reader, maxBodySize int, dst []byte) ([]byte, error) {
+	if maxBodySize > defaultMaxInMemoryFileSize {
+		maxBodySize = defaultMaxInMemoryFileSize // @Ben 进行限制，可能会以这种形式上传大文件
+	}
 	dst = dst[:cap(dst)]
 	if len(dst) == 0 {
 		dst = make([]byte, 1024)
@@ -2279,6 +2282,9 @@ func readBodyChunked(r *bufio.Reader, maxBodySize int, dst []byte) ([]byte, erro
 		// but nothing we should write to.
 		panic("BUG: expected zero-length buffer")
 	}
+	// if maxBodySize > defaultMaxInMemoryFileSize {
+	// 	maxBodySize = defaultMaxInMemoryFileSize // @Ben 不允许以这种形式上传大文件，会把整个文件流都读取到内存中
+	// }
 
 	strCRLFLen := len(strCRLF)
 	for {
