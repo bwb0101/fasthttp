@@ -21,6 +21,8 @@ import (
 var strCRLFLen = len(strCRLF)
 
 // 如果是form，返回formSize指定的大小
+//
+// body不应该把form的数据都读取到内存中，比如一个很大的文件
 func (req *Request) BodyLimit(limitFormSize int) []byte {
 	if req.bodyRaw != nil {
 		return req.bodyRaw
@@ -35,12 +37,78 @@ func (req *Request) BodyLimit(limitFormSize int) []byte {
 }
 
 func (req *Request) marshalMultipartForm(limitFormSize int) ([]byte, error) {
-	bodyBuf := req.bodyBuffer()
-	bodyBuf.Reset()
-	if err := writeMultipartForm(req.multipartForm, req.multipartFormBoundary, bodyBuf, limitFormSize); err != nil {
+	var buf bytebufferpool.ByteBuffer
+	if err := writeMultipartForm(&buf, req.multipartForm, req.multipartFormBoundary, limitFormSize); err != nil {
 		return nil, err
 	}
-	return bodyBuf.B, nil
+	return buf.B, nil
+}
+
+func writeMultipartForm(w *bytebufferpool.ByteBuffer, f *multipart.Form, boundary string, limitFormSize int) error {
+	// Do not care about memory allocations here, since multipart
+	// form processing is slow.
+	if len(boundary) == 0 {
+		return errors.New("form boundary cannot be empty")
+	}
+	//
+	mw := multipart.NewWriter(w)
+	if err := mw.SetBoundary(boundary); err != nil {
+		return fmt.Errorf("cannot use form boundary %q: %w", boundary, err)
+	}
+
+	// marshal values
+	for k, vv := range f.Value {
+		for _, v := range vv {
+			if err := mw.WriteField(k, v); err != nil {
+				return fmt.Errorf("cannot write form field %q value %q: %w", k, v, err)
+			}
+		}
+	}
+
+	if limitFormSize < 64 {
+		limitFormSize = 1024
+	}
+	if len(w.B) >= limitFormSize {
+		return nil
+	}
+
+	// marshal files
+	for k, fvv := range f.File {
+		for _, fv := range fvv {
+			if len(w.B) >= limitFormSize {
+				break
+			}
+			vw, err := mw.CreatePart(fv.Header)
+			if err != nil {
+				return fmt.Errorf("cannot create form file %q (%q): %w", k, fv.Filename, err)
+			}
+			fh, err := fv.Open()
+			if err != nil {
+				return fmt.Errorf("cannot open form file %q (%q): %w", k, fv.Filename, err)
+			}
+			if _, err = limitCopyZeroAlloc(vw, fh, limitFormSize-len(w.B)); err != nil {
+				_ = fh.Close()
+				return fmt.Errorf("error when copying form file %q (%q): %w", k, fv.Filename, err)
+			}
+			if err = fh.Close(); err != nil {
+				return fmt.Errorf("cannot close form file %q (%q): %w", k, fv.Filename, err)
+			}
+		}
+	}
+
+	if err := mw.Close(); err != nil {
+		return fmt.Errorf("error when closing multipart form writer: %w", err)
+	}
+
+	return nil
+}
+
+func limitCopyZeroAlloc(w io.Writer, r io.Reader, limit int) (int64, error) {
+	vbuf := copyBufPool.Get()
+	buf := vbuf.([]byte)
+	n, err := io.CopyBuffer(w, &myLimitReader{r: r, limit: limit}, buf)
+	copyBufPool.Put(vbuf)
+	return n, err
 }
 
 func (req *Request) readBodyChunked2(r *bufio.Reader, maxBodySize int, dst []byte) ([]byte, error) {
@@ -80,84 +148,8 @@ func (req *Request) readBodyChunked2(r *bufio.Reader, maxBodySize int, dst []byt
 		mr := multipart.NewReader(&chunkedFormReader{r: r, limitSize: maxBodySize, buf: make([]byte, 5120)}, boundary)
 		var err error
 		req.multipartForm, err = mr.ReadForm(req.Header.headerChk, int64(defaultMaxInMemoryFileSize))
-		return nil, err
+		return append(dst, 0), err // 返回一个字节结果
 	}
-}
-
-func writeMultipartForm(f *multipart.Form, boundary string, buf *bytebufferpool.ByteBuffer, limitFormSize int) error {
-	// Do not care about memory allocations here, since multipart
-	// form processing is slow.
-	if len(boundary) == 0 {
-		return errors.New("form boundary cannot be empty")
-	}
-	w := bytebufferpool.Get()
-	defer bytebufferpool.Put(w)
-	//
-	mw := multipart.NewWriter(w)
-	if err := mw.SetBoundary(boundary); err != nil {
-		return fmt.Errorf("cannot use form boundary %q: %w", boundary, err)
-	}
-
-	// marshal values
-	for k, vv := range f.Value {
-		for _, v := range vv {
-			if err := mw.WriteField(k, v); err != nil {
-				return fmt.Errorf("cannot write form field %q value %q: %w", k, v, err)
-			}
-		}
-	}
-
-	if limitFormSize < 64 {
-		limitFormSize = 1024
-	}
-	if len(w.B) >= limitFormSize {
-		if _, err := buf.Write(w.B); err != nil {
-			return err
-		}
-		return nil
-	}
-
-	// marshal files
-	for k, fvv := range f.File {
-		for _, fv := range fvv {
-			if len(buf.B) >= limitFormSize {
-				break
-			}
-			vw, err := mw.CreatePart(fv.Header)
-			if err != nil {
-				return fmt.Errorf("cannot create form file %q (%q): %w", k, fv.Filename, err)
-			}
-			fh, err := fv.Open()
-			if err != nil {
-				return fmt.Errorf("cannot open form file %q (%q): %w", k, fv.Filename, err)
-			}
-			if _, err = limitCopyZeroAlloc(vw, fh, limitFormSize-len(w.B)); err != nil {
-				_ = fh.Close()
-				return fmt.Errorf("error when copying form file %q (%q): %w", k, fv.Filename, err)
-			}
-			if err = fh.Close(); err != nil {
-				return fmt.Errorf("cannot close form file %q (%q): %w", k, fv.Filename, err)
-			}
-			//
-			if _, err := buf.Write(w.B); err != nil {
-				return err
-			}
-		}
-	}
-
-	if err := mw.Close(); err != nil {
-		return fmt.Errorf("error when closing multipart form writer: %w", err)
-	}
-
-	return nil
-}
-
-func limitCopyZeroAlloc(w io.Writer, r io.Reader, limit int) (int64, error) {
-	vbuf := copyBufPool.Get()
-	buf := vbuf.([]byte)
-	n, err := io.CopyBuffer(w, &myLimitReader{r: r, limit: limit}, buf)
-	copyBufPool.Put(vbuf)
-	return n, err
 }
 
 type chunkedFormReader struct {
@@ -194,7 +186,7 @@ func (r *chunkedFormReader) Read(p []byte) (n int, err error) {
 		r.chunkSize = chunkSize
 	}
 	const bs = 4096
-	if chunkSize > bs {
+	if chunkSize > bs { // 读取的大于4096，需要分多次读取
 		r.chunkSize -= bs
 		r.rs += bs
 		n = bs
@@ -203,7 +195,7 @@ func (r *chunkedFormReader) Read(p []byte) (n int, err error) {
 		n = chunkSize
 		r.chunkSize = 0 // 全部读取完
 		r.rs += chunkSize
-		chunkSize += strCRLFLen // 读取尾部
+		chunkSize += strCRLFLen // 读取尾部结束标记
 	}
 	r.wt = n
 	err = r.appendBodyFixedSize(r.buf[:chunkSize], chunkSize)

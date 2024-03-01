@@ -1301,7 +1301,7 @@ func (req *Request) ReadBody(r *bufio.Reader, contentLength int, maxBodySize int
 	case contentLength >= 0:
 		bodyBuf.B, err = readBody(r, contentLength, maxBodySize, bodyBuf.B)
 	case contentLength == -1:
-		bodyBuf.B, err = req.readBodyChunked2(r, maxBodySize, bodyBuf.B) // @Ben 尝试解析成form
+		bodyBuf.B, err = req.readBodyChunked2(r, maxBodySize, bodyBuf.B) // @Ben 可解析成form
 		if err == nil && len(bodyBuf.B) == 0 {
 			req.Header.SetContentLength(0)
 		}
