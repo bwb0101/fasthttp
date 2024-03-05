@@ -7,4 +7,4 @@
 
 package multipart
 
-type BodyHeaderCheck func(body []byte, fileName string, form *Form) (err error) // @Ben
+type ValidFormFileFormat func(body []byte, fileName string, form *Form) (err error) // @Ben

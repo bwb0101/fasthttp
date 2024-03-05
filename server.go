@@ -410,9 +410,9 @@ type Server struct {
 	// NetHttpFormValueFunc gives a FormValueFunc func implementation that is consistent with net/http.
 	FormValueFunc FormValueFunc
 
-	// 请求头检测：用于上传文件
-	GetBodyHeaderCheck func(uri []byte) multipart.BodyHeaderCheck // @Ben
-	AuthValidate       func(ctx *RequestCtx) error                // @Ben
+	// 请求头检测
+	ValidHeader  func(uri []byte) MyValidHeader // @Ben
+	AuthValidate func(ctx *RequestCtx) error    // @Ben
 
 	nextProtos map[string]ServeHandler
 
@@ -2262,8 +2262,8 @@ func (s *Server) serveConn(c net.Conn) (err error) {
 					err = s.AuthValidate(ctx)
 				}
 				if err == nil {
-					if s.GetBodyHeaderCheck != nil { // @Ben
-						ctx.Request.Header.headerChk = s.GetBodyHeaderCheck(ctx.Request.Header.requestURI)
+					if s.ValidHeader != nil { // @Ben
+						ctx.Request.Header.myValid = s.ValidHeader(ctx.Request.Header.requestURI)
 					}
 					// read body
 					if s.StreamRequestBody {

@@ -12,6 +12,8 @@ import (
 	"math"
 	"net/textproto"
 	"os"
+
+	"github.com/valyala/fasthttp"
 )
 
 // ErrMessageTooLarge is returned by ReadForm if the message form
@@ -28,8 +30,8 @@ var ErrMessageTooLarge = errors.New("multipart: message too large")
 // disk in temporary files.
 // It returns ErrMessageTooLarge if all non-file parts can't be stored in
 // memory.
-func (r *Reader) ReadForm(doCheck BodyHeaderCheck, maxMemory int64) (*Form, error) {
-	return r.readForm(doCheck, maxMemory)
+func (r *Reader) ReadForm(validFormFile fasthttp.MyValidHeader, maxMemory int64) (*Form, error) {
+	return r.readForm(validFormFile, maxMemory)
 }
 
 var (
@@ -37,7 +39,7 @@ var (
 // multipartMaxParts = godebug.New("multipartmaxparts")
 )
 
-func (r *Reader) readForm(doCheck BodyHeaderCheck, maxMemory int64) (_ *Form, err error) {
+func (r *Reader) readForm(validFormFile fasthttp.MyValidHeader, maxMemory int64) (_ *Form, err error) {
 	form := &Form{make(map[string][]string), make(map[string][]*FileHeader)}
 	var (
 		file    *os.File
@@ -171,8 +173,8 @@ func (r *Reader) readForm(doCheck BodyHeaderCheck, maxMemory int64) (_ *Form, er
 		if err != nil && err != io.EOF {
 			return nil, err
 		}
-		if doCheck != nil { // 文件key设置在最后，需要先读取其他value才能在func里正确判断 @Ben
-			if err = doCheck(b.Bytes()[:1024], fh.Filename, form); err != nil {
+		if validFormFile.ValidFormFileFormat != nil && b.Len() > validFormFile.ValidHeadSize { // 文件key设置在最后，需要先读取其他value才能在func里正确判断 @Ben
+			if err = validFormFile.ValidFormFileFormat(b.Bytes()[:validFormFile.ValidHeadSize], fh.Filename, form); err != nil {
 				return nil, err
 			}
 		}

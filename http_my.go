@@ -18,6 +18,12 @@ import (
 	"github.com/valyala/fasthttp/zzz/mime/multipart"
 )
 
+type MyValidHeader struct {
+	ValidFormFileFormat multipart.ValidFormFileFormat
+	ValidHeadSize       int
+}
+
+var MyValidHeaderDefault = MyValidHeader{}
 var strCRLFLen = len(strCRLF)
 
 // 如果是form，返回formSize指定的大小
@@ -145,9 +151,9 @@ func (req *Request) readBodyChunked2(r *bufio.Reader, maxBodySize int, dst []byt
 		}
 	} else {
 		req.multipartFormBoundary = boundary
-		mr := multipart.NewReader(&chunkedFormReader{r: r, limitSize: maxBodySize, buf: make([]byte, 5120)}, boundary)
+		mr := multipart.NewReader(&chunkedFormReader{r: r, limitSize: maxBodySize, buf: make([]byte, 4098)}, boundary)
 		var err error
-		req.multipartForm, err = mr.ReadForm(req.Header.headerChk, int64(defaultMaxInMemoryFileSize))
+		req.multipartForm, err = mr.ReadForm(req.Header.myValid, int64(defaultMaxInMemoryFileSize))
 		return append(dst, 0), err // 返回一个字节结果
 	}
 }
