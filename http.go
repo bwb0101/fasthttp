@@ -1061,7 +1061,7 @@ func WriteMultipartForm(w io.Writer, f *multipart.Form, boundary string) error {
 	return nil
 }
 
-func readMultipartForm(validFormFile MyValidHeader, r io.Reader, boundary string, size, maxInMemoryFileSize int) (*multipart.Form, error) {
+func readMultipartForm(validFormFile multipart.MyValidHeader, r io.Reader, boundary string, size, maxInMemoryFileSize int) (*multipart.Form, error) {
 	// Do not care about memory allocations here, since they are tiny
 	// compared to multipart data (aka multi-MB files) usually sent
 	// in multipart/form-data requests.

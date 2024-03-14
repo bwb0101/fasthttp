@@ -12,8 +12,6 @@ import (
 	"math"
 	"net/textproto"
 	"os"
-
-	"github.com/valyala/fasthttp"
 )
 
 // ErrMessageTooLarge is returned by ReadForm if the message form
@@ -30,7 +28,7 @@ var ErrMessageTooLarge = errors.New("multipart: message too large")
 // disk in temporary files.
 // It returns ErrMessageTooLarge if all non-file parts can't be stored in
 // memory.
-func (r *Reader) ReadForm(validFormFile fasthttp.MyValidHeader, maxMemory int64) (*Form, error) {
+func (r *Reader) ReadForm(validFormFile MyValidHeader, maxMemory int64) (*Form, error) {
 	return r.readForm(validFormFile, maxMemory)
 }
 
@@ -39,7 +37,7 @@ var (
 // multipartMaxParts = godebug.New("multipartmaxparts")
 )
 
-func (r *Reader) readForm(validFormFile fasthttp.MyValidHeader, maxMemory int64) (_ *Form, err error) {
+func (r *Reader) readForm(validFormFile MyValidHeader, maxMemory int64) (_ *Form, err error) {
 	form := &Form{make(map[string][]string), make(map[string][]*FileHeader)}
 	var (
 		file    *os.File

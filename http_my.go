@@ -18,12 +18,6 @@ import (
 	"github.com/valyala/fasthttp/zzz/mime/multipart"
 )
 
-type MyValidHeader struct {
-	ValidFormFileFormat multipart.ValidFormFileFormat
-	ValidHeadSize       int
-}
-
-var MyValidHeaderDefault = MyValidHeader{}
 var strCRLFLen = len(strCRLF)
 
 // 如果是form，返回formSize指定的大小
