@@ -411,8 +411,8 @@ type Server struct {
 	FormValueFunc FormValueFunc
 
 	// 请求头检测
-	ValidHeader  func(uri []byte) MyValidHeader // @Ben
-	AuthValidate func(ctx *RequestCtx) error    // @Ben
+	ValidHeader  func(uri []byte) multipart.MyValidHeader // @Ben
+	AuthValidate func(ctx *RequestCtx) error              // @Ben
 
 	nextProtos map[string]ServeHandler
 

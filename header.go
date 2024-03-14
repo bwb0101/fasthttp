@@ -9,6 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/valyala/fasthttp/zzz/mime/multipart"
 )
 
 const (
@@ -93,7 +95,7 @@ type RequestHeader struct {
 	// wire.
 	rawHeaders []byte
 
-	myValid MyValidHeader // @Ben
+	myValid multipart.MyValidHeader // @Ben
 }
 
 // SetContentRange sets 'Content-Range: bytes startPos-endPos/contentLength'
