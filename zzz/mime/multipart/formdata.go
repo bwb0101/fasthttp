@@ -183,6 +183,7 @@ func (r *Reader) readForm(validFormFile MyValidHeader, maxMemory int64) (_ *Form
 					return nil, err
 				}
 			}
+			// fmt.Println("------------", file.Name())
 			numDiskFiles++
 			if _, err := file.Write(b.Bytes()); err != nil {
 				return nil, err

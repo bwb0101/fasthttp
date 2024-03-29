@@ -145,9 +145,11 @@ func (req *Request) readBodyChunked2(r *bufio.Reader, maxBodySize int, dst []byt
 		}
 	} else {
 		req.multipartFormBoundary = boundary
-		mr := multipart.NewReader(&chunkedFormReader{r: r, limitSize: maxBodySize, buf: make([]byte, 4098)}, boundary)
+		cr := &chunkedFormReader{r: r, limitSize: maxBodySize, buf: make([]byte, 4098)}
+		mr := multipart.NewReader(cr, boundary)
 		var err error
 		req.multipartForm, err = mr.ReadForm(req.Header.myValid, int64(defaultMaxInMemoryFileSize))
+		// fmt.Println(cr.rs)
 		return append(dst, 0), err // 返回一个字节结果
 	}
 }
