@@ -43,15 +43,18 @@ func FuzzResponseReadLimitBody(f *testing.F) {
 	f.Add([]byte("HTTP/1.1 200 OK\r\nContent-Type: aa\r\nContent-Length: 10\r\n\r\n9876543210"), 1024)
 
 	f.Fuzz(func(t *testing.T, body []byte, max int) {
-		if len(body) > 10*1024 || max > 10*1024 {
+		if len(body) > 1024*1024 || max > 1024*1024 {
+			return
+		}
+		// Only test with a max for the body, otherwise a very large Content-Length will just OOM.
+		if max <= 0 {
 			return
 		}
 
-		var res Response
+		res := AcquireResponse()
+		defer ReleaseResponse(res)
 
 		_ = res.ReadLimitBody(bufio.NewReader(bytes.NewReader(body)), max)
-		w := bytes.Buffer{}
-		_, _ = res.WriteTo(&w)
 	})
 }
 
@@ -59,15 +62,18 @@ func FuzzRequestReadLimitBody(f *testing.F) {
 	f.Add([]byte("POST /a HTTP/1.1\r\nHost: a.com\r\nTransfer-Encoding: chunked\r\nContent-Type: aa\r\n\r\n6\r\nfoobar\r\n3\r\nbaz\r\n0\r\nfoobar\r\n\r\n"), 1024)
 
 	f.Fuzz(func(t *testing.T, body []byte, max int) {
-		if len(body) > 10*1024 || max > 10*1024 {
+		if len(body) > 1024*1024 || max > 1024*1024 {
+			return
+		}
+		// Only test with a max for the body, otherwise a very large Content-Length will just OOM.
+		if max <= 0 {
 			return
 		}
 
-		var req Request
+		req := AcquireRequest()
+		defer ReleaseRequest(req)
 
 		_ = req.ReadLimitBody(bufio.NewReader(bytes.NewReader(body)), max)
-		w := bytes.Buffer{}
-		_, _ = req.WriteTo(&w)
 	})
 }
 
