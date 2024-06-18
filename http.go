@@ -1099,7 +1099,7 @@ func readMultipartForm(validFormFile multipart.MyValidHeader, r io.Reader, bound
 	mr := multipart.NewReader(lr, boundary)
 	f, err := mr.ReadForm(validFormFile, int64(maxInMemoryFileSize))
 	if err != nil {
-		if _, ok := err.(*zzz.FastHttpMyHeaderCheckError); ok { // @Ben ºöÂÔÒµÎñÔ¤ÏÈ´¦ÀíµÄ´íÎó
+		if _, ok := err.(*zzz.FastHttpMyHeaderCheckError); ok { // @Ben å¿½ç•¥ä¸šåŠ¡é¢„å…ˆå¤„ç†çš„é”™è¯¯
 			return nil, err
 		}
 		return nil, fmt.Errorf("cannot read multipart/form-data body: %w", err)
@@ -1327,7 +1327,7 @@ func (req *Request) ReadBody(r *bufio.Reader, contentLength, maxBodySize int) (e
 	case contentLength >= 0:
 		bodyBuf.B, err = readBody(r, contentLength, maxBodySize, bodyBuf.B)
 	case contentLength == -1:
-		bodyBuf.B, err = req.readBodyChunked2(r, maxBodySize, bodyBuf.B) // @Ben ¿É½âÎö³Éform
+		bodyBuf.B, err = req.readBodyChunked2(r, maxBodySize, bodyBuf.B) // @Ben å¯è§£æžæˆform
 		if err == nil && len(bodyBuf.B) == 0 {
 			req.Header.SetContentLength(0)
 		}
@@ -2300,7 +2300,7 @@ func readBodyWithStreaming(r *bufio.Reader, contentLength, maxBodySize int, dst 
 
 func readBodyIdentity(r *bufio.Reader, maxBodySize int, dst []byte) ([]byte, error) {
 	if maxBodySize > defaultMaxInMemoryFileSize {
-		maxBodySize = defaultMaxInMemoryFileSize // @Ben ½øÐÐÏÞÖÆ£¬¿ÉÄÜ»áÒÔÕâÖÖÐÎÊ½ÉÏ´«´óÎÄ¼þ
+		maxBodySize = defaultMaxInMemoryFileSize // @Ben è¿›è¡Œé™åˆ¶ï¼Œå¯èƒ½ä¼šä»¥è¿™ç§å½¢å¼ä¸Šä¼ å¤§æ–‡ä»¶
 	}
 	dst = dst[:cap(dst)]
 	if len(dst) == 0 {
@@ -2380,7 +2380,7 @@ func readBodyChunked(r *bufio.Reader, maxBodySize int, dst []byte) ([]byte, erro
 		panic("BUG: expected zero-length buffer")
 	}
 	// if maxBodySize > defaultMaxInMemoryFileSize {
-	// 	maxBodySize = defaultMaxInMemoryFileSize // @Ben ²»ÔÊÐíÒÔÕâÖÖÐÎÊ½ÉÏ´«´óÎÄ¼þ£¬»á°ÑÕû¸öÎÄ¼þÁ÷¶¼¶ÁÈ¡µ½ÄÚ´æÖÐ
+	// 	maxBodySize = defaultMaxInMemoryFileSize // @Ben ä¸å…è®¸ä»¥è¿™ç§å½¢å¼ä¸Šä¼ å¤§æ–‡ä»¶ï¼Œä¼šæŠŠæ•´ä¸ªæ–‡ä»¶æµéƒ½è¯»å–åˆ°å†…å­˜ä¸­
 	// }
 
 	strCRLFLen := len(strCRLF)

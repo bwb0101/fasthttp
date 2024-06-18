@@ -411,7 +411,7 @@ type Server struct {
 	// NetHttpFormValueFunc gives a FormValueFunc func implementation that is consistent with net/http.
 	FormValueFunc FormValueFunc
 
-	// ÇëÇóÍ·¼ì²â
+	// è¯·æ±‚å¤´æ£€æµ‹
 	ValidHeader  func(uri []byte) multipart.MyValidHeader // @Ben
 	AuthValidate func(ctx *RequestCtx) error              // @Ben
 
