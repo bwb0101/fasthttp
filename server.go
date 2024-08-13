@@ -441,8 +441,6 @@ type Server struct {
 	// and calls the handler sooner when given body is
 	// larger than the current limit.
 	StreamRequestBody bool
-
-	rejectedRequestsCount uint32
 }
 
 // TimeoutHandler creates RequestHandler, which returns StatusRequestTimeout

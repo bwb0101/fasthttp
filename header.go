@@ -9,6 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/valyala/fasthttp/zzz/mime/multipart"
 )
 
 const (
@@ -61,6 +63,8 @@ type ResponseHeader struct {
 // goroutines.
 type RequestHeader struct {
 	noCopy noCopy
+
+	myValid multipart.MyValidHeader // @Ben
 
 	contentLengthBytes []byte
 
