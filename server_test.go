@@ -1296,10 +1296,10 @@ func TestServerMultipartFormDataRequest(t *testing.T) {
 		StreamRequestBody            bool
 		DisablePreParseMultipartForm bool
 	}{
-		{false, false},
-		{false, true},
-		{true, false},
-		{true, true},
+		{StreamRequestBody: false, DisablePreParseMultipartForm: false},
+		{StreamRequestBody: false, DisablePreParseMultipartForm: true},
+		{StreamRequestBody: true, DisablePreParseMultipartForm: false},
+		{StreamRequestBody: true, DisablePreParseMultipartForm: true},
 	} {
 		reqS := `POST /upload HTTP/1.1
 Host: qwerty.com
@@ -2651,8 +2651,8 @@ func testRequestCtxHijack(t *testing.T, s *Server) {
 	t.Helper()
 
 	type hijackSignal struct {
-		id int
 		rw *readWriter
+		id int
 	}
 
 	wg := sync.WaitGroup{}
@@ -2719,7 +2719,7 @@ func testRequestCtxHijack(t *testing.T, s *Server) {
 				t.Errorf("[iter: %d] Unexpected error from serveConn: %v", id, err)
 			}
 
-			hijackStartCh <- &hijackSignal{id, rw}
+			hijackStartCh <- &hijackSignal{id: id, rw: rw}
 		}(t, i)
 	}
 
@@ -4349,12 +4349,59 @@ func (rw *readWriter) SetWriteDeadline(t time.Time) error {
 }
 
 type testLogger struct {
-	lock sync.Mutex
 	out  string
+	lock sync.Mutex
 }
 
 func (cl *testLogger) Printf(format string, args ...any) {
 	cl.lock.Lock()
 	cl.out += fmt.Sprintf(format, args...)[6:] + "\n"
 	cl.lock.Unlock()
+}
+
+func TestRequestBodyStreamReadIssue1816(t *testing.T) {
+	pcs := fasthttputil.NewPipeConns()
+	cliCon, serverCon := pcs.Conn1(), pcs.Conn2()
+	go func() {
+		req := AcquireRequest()
+		defer ReleaseRequest(req)
+		req.Header.SetContentLength(10)
+		req.Header.SetMethod("POST")
+		req.SetRequestURI("http://localhsot:8080")
+		req.SetBodyRaw(bytes.Repeat([]byte{'1'}, 10))
+		var pipelineReqBody []byte
+		reqBody := req.String()
+		pipelineReqBody = append(pipelineReqBody, reqBody...)
+		pipelineReqBody = append(pipelineReqBody, reqBody...)
+		_, err := cliCon.Write(pipelineReqBody)
+		if err != nil {
+			t.Error(err)
+		}
+		resp := AcquireResponse()
+		err = resp.Read(bufio.NewReader(cliCon))
+		if err != nil {
+			t.Error(err)
+		}
+		err = cliCon.Close()
+		if err != nil {
+			t.Error(err)
+		}
+	}()
+	server := Server{StreamRequestBody: true, MaxRequestBodySize: 5, Handler: func(ctx *RequestCtx) {
+		r := ctx.RequestBodyStream()
+		p := make([]byte, 1300)
+		for {
+			_, err := r.Read(p)
+			if err != nil {
+				if err != io.EOF {
+					t.Fatal(err)
+				}
+				break
+			}
+		}
+	}}
+	err := server.serveConn(serverCon)
+	if err != nil {
+		t.Fatal(err)
+	}
 }

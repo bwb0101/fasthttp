@@ -149,6 +149,18 @@ type ServeHandler func(c net.Conn) error
 type Server struct {
 	noCopy noCopy
 
+	perIPConnCounter perIPConnCounter
+
+	ctxPool        sync.Pool
+	readerPool     sync.Pool
+	writerPool     sync.Pool
+	hijackConnPool sync.Pool
+
+	// Logger, which is used by RequestCtx.Logger().
+	//
+	// By default standard logger from log package is used.
+	Logger Logger
+
 	// Handler for processing incoming requests.
 	//
 	// Take into account that no `panic` recovery is done by `fasthttp` (thus any `panic` will take down the entire server).
@@ -182,10 +194,46 @@ type Server struct {
 	// like they are normal requests.
 	ContinueHandler func(header *RequestHeader) bool
 
+	// ConnState specifies an optional callback function that is
+	// called when a client connection changes state. See the
+	// ConnState type and associated constants for details.
+	ConnState func(net.Conn, ConnState)
+
+	// 请求头检测
+	ValidHeader  func(uri []byte) multipart.MyValidHeader // @Ben
+	AuthValidate func(ctx *RequestCtx) error              // @Ben
+
+	// TLSConfig optionally provides a TLS configuration for use
+	// by ServeTLS, ServeTLSEmbed, ListenAndServeTLS, ListenAndServeTLSEmbed,
+	// AppendCert, AppendCertEmbed and NextProto.
+	//
+	// Note that this value is cloned by ServeTLS, ServeTLSEmbed, ListenAndServeTLS
+	// and ListenAndServeTLSEmbed, so it's not possible to modify the configuration
+	// with methods like tls.Config.SetSessionTicketKeys.
+	// To use SetSessionTicketKeys, use Server.Serve with a TLS Listener
+	// instead.
+	TLSConfig *tls.Config
+
+	// FormValueFunc, which is used by RequestCtx.FormValue and support for customizing
+	// the behaviour of the RequestCtx.FormValue function.
+	//
+	// NetHttpFormValueFunc gives a FormValueFunc func implementation that is consistent with net/http.
+	FormValueFunc FormValueFunc
+
+	nextProtos map[string]ServeHandler
+
+	concurrencyCh chan struct{}
+
+	idleConns map[net.Conn]time.Time
+	done      chan struct{}
+
 	// Server name for sending in response headers.
 	//
 	// Default server name is used if left blank.
 	Name string
+
+	// We need to know our listeners and idle connections so we can close them in Shutdown().
+	ln []net.Listener
 
 	// The maximum number of concurrent connections the server may serve.
 	//
@@ -262,6 +310,21 @@ type Server struct {
 	//
 	// Request body size is limited by DefaultMaxRequestBodySize by default.
 	MaxRequestBodySize int
+
+	// SleepWhenConcurrencyLimitsExceeded is a duration to be slept of if
+	// the concurrency limit in exceeded (default [when is 0]: don't sleep
+	// and accept new connections immediately).
+	SleepWhenConcurrencyLimitsExceeded time.Duration
+
+	idleConnsMu sync.Mutex
+
+	mu sync.Mutex
+
+	concurrency uint32
+	open        int32
+	stop        int32
+
+	rejectedRequestsCount uint32
 
 	// Whether to disable keep-alive connections.
 	//
@@ -341,11 +404,6 @@ type Server struct {
 	//     * cONTENT-lenGTH -> Content-Length
 	DisableHeaderNamesNormalizing bool
 
-	// SleepWhenConcurrencyLimitsExceeded is a duration to be slept of if
-	// the concurrency limit in exceeded (default [when is 0]: don't sleep
-	// and accept new connections immediately).
-	SleepWhenConcurrencyLimitsExceeded time.Duration
-
 	// NoDefaultServerHeader, when set to true, causes the default Server header
 	// to be excluded from the Response.
 	//
@@ -383,59 +441,6 @@ type Server struct {
 	// and calls the handler sooner when given body is
 	// larger than the current limit.
 	StreamRequestBody bool
-
-	// ConnState specifies an optional callback function that is
-	// called when a client connection changes state. See the
-	// ConnState type and associated constants for details.
-	ConnState func(net.Conn, ConnState)
-
-	// Logger, which is used by RequestCtx.Logger().
-	//
-	// By default standard logger from log package is used.
-	Logger Logger
-
-	// TLSConfig optionally provides a TLS configuration for use
-	// by ServeTLS, ServeTLSEmbed, ListenAndServeTLS, ListenAndServeTLSEmbed,
-	// AppendCert, AppendCertEmbed and NextProto.
-	//
-	// Note that this value is cloned by ServeTLS, ServeTLSEmbed, ListenAndServeTLS
-	// and ListenAndServeTLSEmbed, so it's not possible to modify the configuration
-	// with methods like tls.Config.SetSessionTicketKeys.
-	// To use SetSessionTicketKeys, use Server.Serve with a TLS Listener
-	// instead.
-	TLSConfig *tls.Config
-
-	// FormValueFunc, which is used by RequestCtx.FormValue and support for customizing
-	// the behaviour of the RequestCtx.FormValue function.
-	//
-	// NetHttpFormValueFunc gives a FormValueFunc func implementation that is consistent with net/http.
-	FormValueFunc FormValueFunc
-
-	// 请求头检测
-	ValidHeader  func(uri []byte) multipart.MyValidHeader // @Ben
-	AuthValidate func(ctx *RequestCtx) error              // @Ben
-
-	nextProtos map[string]ServeHandler
-
-	concurrency      uint32
-	concurrencyCh    chan struct{}
-	perIPConnCounter perIPConnCounter
-
-	ctxPool        sync.Pool
-	readerPool     sync.Pool
-	writerPool     sync.Pool
-	hijackConnPool sync.Pool
-
-	// We need to know our listeners and idle connections so we can close them in Shutdown().
-	ln []net.Listener
-
-	idleConns   map[net.Conn]time.Time
-	idleConnsMu sync.Mutex
-
-	mu   sync.Mutex
-	open int32
-	stop int32
-	done chan struct{}
 
 	rejectedRequestsCount uint32
 }
@@ -590,37 +595,39 @@ func CompressHandlerBrotliLevel(h RequestHandler, brotliLevel, otherLevel int) R
 type RequestCtx struct {
 	noCopy noCopy
 
-	// Incoming request.
-	//
-	// Copying Request by value is forbidden. Use pointer to Request instead.
-	Request Request
-
 	// Outgoing response.
 	//
 	// Copying Response by value is forbidden. Use pointer to Response instead.
 	Response Response
 
-	userValues userData
-
-	connID         uint64
-	connRequestNum uint64
-	connTime       time.Time
-	remoteAddr     net.Addr
+	connTime time.Time
 
 	time time.Time
 
-	logger ctxLogger
-	s      *Server
-	c      net.Conn
-	fbr    firstByteReader
+	logger     ctxLogger
+	remoteAddr net.Addr
+
+	c net.Conn
+	s *Server
 
 	timeoutResponse *Response
 	timeoutCh       chan struct{}
 	timeoutTimer    *time.Timer
 
-	hijackHandler    HijackHandler
+	hijackHandler HijackHandler
+	formValueFunc FormValueFunc
+	fbr           firstByteReader
+
+	userValues userData
+
+	// Incoming request.
+	//
+	// Copying Request by value is forbidden. Use pointer to Request instead.
+	Request Request
+
+	connID           uint64
+	connRequestNum   uint64
 	hijackNoResponse bool
-	formValueFunc    FormValueFunc
 }
 
 // HijackHandler must process the hijacked connection c.
@@ -2197,7 +2204,7 @@ func (s *Server) serveConn(c net.Conn) (err error) {
 					// If reading from a keep-alive connection returns nothing it means
 					// the connection was closed (either timeout or from the other side).
 					if err != io.EOF {
-						err = ErrNothingRead{err}
+						err = ErrNothingRead{error: err}
 					}
 				}
 			}
@@ -2756,7 +2763,15 @@ func (ctx *RequestCtx) Deadline() (deadline time.Time, ok bool) {
 // Note: Because creating a new channel for every request is just too expensive, so
 // RequestCtx.s.done is only closed when the server is shutting down.
 func (ctx *RequestCtx) Done() <-chan struct{} {
-	return ctx.s.done
+	// fix use new variables to prevent panic caused by modifying the original done chan to nil.
+	done := ctx.s.done
+
+	if done == nil {
+		done = make(chan struct{}, 1)
+		done <- struct{}{}
+		return done
+	}
+	return done
 }
 
 // Err returns a non-nil error value after Done is closed,
@@ -2770,7 +2785,7 @@ func (ctx *RequestCtx) Done() <-chan struct{} {
 // RequestCtx.s.done is only closed when the server is shutting down.
 func (ctx *RequestCtx) Err() error {
 	select {
-	case <-ctx.s.done:
+	case <-ctx.Done():
 		return context.Canceled
 	default:
 		return nil
