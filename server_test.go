@@ -189,8 +189,8 @@ func TestServerInvalidHeader(t *testing.T) {
 
 	s := &Server{
 		Handler: func(ctx *RequestCtx) {
-			if ctx.Request.Header.Peek("Foo") != nil || ctx.Request.Header.Peek("Foo ") != nil {
-				t.Error("expected Foo header")
+			if ctx.Request.Header.Peek("Foő") != nil || ctx.Request.Header.Peek("Foő ") != nil {
+				t.Error("expected Foő header")
 			}
 		},
 		Logger: &testLogger{},
@@ -208,7 +208,7 @@ func TestServerInvalidHeader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if _, err = c.Write([]byte("POST /foo HTTP/1.1\r\nHost: gle.com\r\nFoo : bar\r\nContent-Length: 5\r\n\r\n12345")); err != nil {
+	if _, err = c.Write([]byte("POST /foo HTTP/1.1\r\nHost: gle.com\r\nFoő : bar\r\nContent-Length: 5\r\n\r\n12345")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -225,7 +225,7 @@ func TestServerInvalidHeader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if _, err = c.Write([]byte("GET /foo HTTP/1.1\r\nHost: gle.com\r\nFoo : bar\r\n\r\n")); err != nil {
+	if _, err = c.Write([]byte("GET /foo HTTP/1.1\r\nHost: gle.com\r\nFoő : bar\r\n\r\n")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -3657,7 +3657,7 @@ func TestCloseOnShutdown(t *testing.T) {
 	done := 0
 	for {
 		select {
-		case <-time.After(time.Second):
+		case <-time.After(time.Second * 2):
 			t.Fatal("shutdown took too long")
 		case <-serveCh:
 			done++
@@ -3836,13 +3836,14 @@ func TestShutdownCloseIdleConns(t *testing.T) {
 }
 
 func TestShutdownWithContext(t *testing.T) {
+	t.Parallel()
 	done := make(chan struct{})
+	defer close(done)
 	ln := fasthttputil.NewInmemoryListener()
 	s := &Server{
 		Handler: func(ctx *RequestCtx) {
-			time.Sleep(4 * time.Second)
+			<-done
 			ctx.Success("aaa/bbb", []byte("real response"))
-			close(done)
 		},
 	}
 	go func() {
@@ -3885,7 +3886,6 @@ func TestShutdownWithContext(t *testing.T) {
 	if o := atomic.LoadInt32(&s.open); o != 1 {
 		t.Fatalf("unexpected open connection num: %#v. Expecting %#v", o, 1)
 	}
-	<-done
 }
 
 func TestMultipleServe(t *testing.T) {
@@ -4141,7 +4141,10 @@ func TestMaxReadTimeoutPerRequest(t *testing.T) {
 		// write body
 		for i := 0; i < 5*1024; i++ {
 			time.Sleep(time.Millisecond)
-			cc.Write([]byte{'a'}) //nolint:errcheck
+			_, err = cc.Write([]byte{'a'})
+			if err != nil {
+				return
+			}
 		}
 	}()
 	ch := make(chan error)
@@ -4168,7 +4171,10 @@ func TestMaxWriteTimeoutPerRequest(t *testing.T) {
 			ctx.SetBodyStreamWriter(func(w *bufio.Writer) {
 				var buf [192]byte
 				for {
-					w.Write(buf[:]) //nolint:errcheck
+					_, err := w.Write(buf[:])
+					if err != nil {
+						return
+					}
 				}
 			})
 		},
@@ -4201,7 +4207,10 @@ func TestMaxWriteTimeoutPerRequest(t *testing.T) {
 		var chunk [192]byte
 		for {
 			time.Sleep(time.Millisecond)
-			br.Read(chunk[:]) //nolint:errcheck
+			_, err = br.Read(chunk[:])
+			if err != nil {
+				return
+			}
 		}
 	}()
 	ch := make(chan error)
@@ -4401,6 +4410,16 @@ func TestRequestBodyStreamReadIssue1816(t *testing.T) {
 		}
 	}}
 	err := server.serveConn(serverCon)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRequestCtxInitShouldNotBeCanceledIssue1879(t *testing.T) {
+	var r Request
+	var requestCtx RequestCtx
+	requestCtx.Init(&r, nil, nil)
+	err := requestCtx.Err()
 	if err != nil {
 		t.Fatal(err)
 	}

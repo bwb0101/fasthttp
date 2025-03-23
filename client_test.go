@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"regexp"
@@ -15,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -1432,6 +1434,7 @@ func TestHostClientMaxConnsWithDeadline(t *testing.T) {
 						continue
 					}
 					t.Errorf("unexpected error: %v", err)
+					return
 				}
 				break
 			}
@@ -1913,7 +1916,7 @@ func testClientDoTimeoutError(t *testing.T, c *Client, n int) {
 func testClientGetTimeoutError(t *testing.T, c *Client, n int) {
 	buf := make([]byte, 10)
 	for i := 0; i < n; i++ {
-		statusCode, body, err := c.GetTimeout(buf, "http://foobar.com/baz", time.Millisecond)
+		statusCode, _, err := c.GetTimeout(buf, "http://foobar.com/baz", time.Millisecond)
 		if err == nil {
 			t.Errorf("expecting error")
 		}
@@ -1922,9 +1925,6 @@ func testClientGetTimeoutError(t *testing.T, c *Client, n int) {
 		}
 		if statusCode != 0 {
 			t.Errorf("unexpected statusCode=%d. Expecting %d", statusCode, 0)
-		}
-		if body == nil {
-			t.Errorf("body must be non-nil")
 		}
 	}
 }
@@ -1990,55 +1990,6 @@ func (r *readTimeoutConn) SetWriteDeadline(d time.Time) error {
 		r.wc <- struct{}{}
 	}()
 	return nil
-}
-
-func TestClientNonIdempotentRetry(t *testing.T) {
-	t.Parallel()
-
-	dialsCount := 0
-	c := &Client{
-		Dial: func(_ string) (net.Conn, error) {
-			dialsCount++
-			switch dialsCount {
-			case 1, 2:
-				return &readErrorConn{}, nil
-			case 3:
-				return &singleReadConn{
-					s: "HTTP/1.1 345 OK\r\nContent-Type: foobar\r\nContent-Length: 7\r\n\r\n0123456",
-				}, nil
-			default:
-				return nil, fmt.Errorf("unexpected number of dials: %d", dialsCount)
-			}
-		},
-	}
-
-	// This POST must succeed, since the readErrorConn closes
-	// the connection before sending any response.
-	// So the client must retry non-idempotent request.
-	dialsCount = 0
-	statusCode, body, err := c.Post(nil, "http://foobar/a/b", nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if statusCode != 345 {
-		t.Fatalf("unexpected status code: %d. Expecting 345", statusCode)
-	}
-	if string(body) != "0123456" {
-		t.Fatalf("unexpected body: %q. Expecting %q", body, "0123456")
-	}
-
-	// Verify that idempotent GET succeeds.
-	dialsCount = 0
-	statusCode, body, err = c.Get(nil, "http://foobar/a/b")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if statusCode != 345 {
-		t.Fatalf("unexpected status code: %d. Expecting 345", statusCode)
-	}
-	if string(body) != "0123456" {
-		t.Fatalf("unexpected body: %q. Expecting %q", body, "0123456")
-	}
 }
 
 func TestClientNonIdempotentRetry_BodyStream(t *testing.T) {
@@ -2660,7 +2611,7 @@ func testClientGetTimeoutSuccess(t *testing.T, c *Client, addr string, n int) {
 		statusCode, body, err := c.GetTimeout(buf, uri, time.Second)
 		buf = body
 		if err != nil {
-			t.Errorf("unexpected error when doing http request: %v", err)
+			t.Fatalf("unexpected error when doing http request: %v", err)
 		}
 		if statusCode != StatusOK {
 			t.Errorf("unexpected status code: %d. Expecting %d", statusCode, StatusOK)
@@ -2850,6 +2801,11 @@ func TestClientConfigureClientFailed(t *testing.T) {
 	c := &Client{
 		ConfigureClient: func(hc *HostClient) error {
 			return errors.New("failed to configure")
+		},
+		Dial: func(addr string) (net.Conn, error) {
+			return &singleEchoConn{
+				b: []byte("HTTP/1.1 345 OK\r\nContent-Type: foobar\r\n\r\n"),
+			}, nil
 		},
 	}
 
@@ -3483,4 +3439,120 @@ func TestDialTimeout(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestClientHeadWithBody(t *testing.T) {
+	t.Parallel()
+
+	ln := fasthttputil.NewInmemoryListener()
+	defer ln.Close()
+
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			t.Error(err)
+		}
+		c.Write([]byte("HTTP/1.1 200 OK\r\n" + //nolint:errcheck
+			"content-type: text/plain\r\n" +
+			"transfer-encoding: chunked\r\n\r\n" +
+			"24\r\nThis is the data in the first chunk \r\n" +
+			"1B\r\nand this is the second one \r\n" +
+			"0\r\n\r\n",
+		))
+	}()
+
+	c := &Client{
+		Dial: func(addr string) (net.Conn, error) {
+			return ln.Dial()
+		},
+		ReadTimeout:               time.Millisecond * 10,
+		MaxIdemponentCallAttempts: 1,
+	}
+
+	req := AcquireRequest()
+	req.SetRequestURI("http://127.0.0.1:7070")
+	req.Header.SetMethod(MethodHead)
+
+	resp := AcquireResponse()
+
+	err := c.Do(req, resp)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The second request on the same connection is going to give a timeout as it can't find
+	// a proper request in what is left on the connection.
+	err = c.Do(req, resp)
+	if err == nil {
+		t.Error("expected timeout error")
+	} else if err != ErrTimeout {
+		t.Error(err)
+	}
+}
+
+func TestRevertPull1233(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.SkipNow()
+	}
+	t.Parallel()
+	const expectedStatus = http.StatusTeapot
+	ln, err := net.Listen("tcp", "127.0.0.1:8089")
+	defer func() { ln.Close() }()
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				if !strings.Contains(err.Error(), "closed") {
+					t.Error(err)
+				}
+				return
+			}
+			_, err = conn.Write([]byte("HTTP/1.1 418 Teapot\r\n\r\n"))
+			if err != nil {
+				t.Error(err)
+			}
+			err = conn.(*net.TCPConn).SetLinger(0)
+			if err != nil {
+				t.Error(err)
+			}
+			conn.Close()
+		}
+	}()
+
+	reqURL := "http://" + ln.Addr().String()
+	reqStrBody := "hello 2323 23323 2323 2323 232323 323 2323 2333333 hello 2323 23323 2323 2323 232323 323 2323 2333333 hello 2323 23323 2323 2323 232323 323 2323 2333333 hello 2323 23323 2323 2323 232323 323 2323 2333333 hello 2323 23323 2323 2323 232323 323 2323 2333333"
+	req2 := AcquireRequest()
+	resp2 := AcquireResponse()
+	defer func() {
+		ReleaseRequest(req2)
+		ReleaseResponse(resp2)
+	}()
+	req2.SetRequestURI(reqURL)
+	req2.SetBodyStream(F{strings.NewReader(reqStrBody)}, -1)
+	cli2 := Client{}
+	err = cli2.Do(req2, resp2)
+	if !errors.Is(err, syscall.EPIPE) && !errors.Is(err, syscall.ECONNRESET) {
+		t.Errorf("expected error %v or %v, but got nil", syscall.EPIPE, syscall.ECONNRESET)
+	}
+	if expectedStatus == resp2.StatusCode() {
+		t.Errorf("Not Expected status code %d", resp2.StatusCode())
+	}
+}
+
+type F struct {
+	*strings.Reader
+}
+
+func (f F) Read(p []byte) (n int, err error) {
+	if len(p) > 10 {
+		p = p[:10]
+	}
+	// Ensure that subsequent segments can see the RST packet caused by sending previous
+	// segments to a closed connection.
+	time.Sleep(500 * time.Microsecond)
+	return f.Reader.Read(p)
 }

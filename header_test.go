@@ -327,6 +327,7 @@ func TestRequestRawHeaders(t *testing.T) {
 
 	kvs := "hOsT: foobar\r\n" +
 		"value:  b\r\n" +
+		"uSeR agent: agent\r\n" +
 		"\r\n"
 	t.Run("normalized", func(t *testing.T) {
 		s := "GET / HTTP/1.1\r\n" + kvs
@@ -342,6 +343,12 @@ func TestRequestRawHeaders(t *testing.T) {
 		v2 := h.Peek("Value")
 		if !bytes.Equal(v2, []byte{'b'}) {
 			t.Fatalf("expecting non empty value. Got %q", v2)
+		}
+		// We accept invalid headers with a space.
+		// See: https://github.com/valyala/fasthttp/issues/1917
+		v3 := h.Peek("uSeR agent")
+		if !bytes.Equal(v3, []byte("agent")) {
+			t.Fatalf("expecting non empty value. Got %q", v3)
 		}
 		if raw := h.RawHeaders(); string(raw) != exp {
 			t.Fatalf("expected header %q, got %q", exp, raw)
@@ -1465,8 +1472,10 @@ func TestResponseHeaderCopyTo(t *testing.T) {
 	}
 
 	// flush buf
-	h.bufKV = argsKV{}
-	h1.bufKV = argsKV{}
+	h.bufK = []byte{}
+	h.bufV = []byte{}
+	h1.bufK = []byte{}
+	h1.bufV = []byte{}
 
 	if !reflect.DeepEqual(&h, &h1) {
 		t.Fatalf("ResponseHeaderCopyTo fail, src: \n%+v\ndst: \n%+v\n", &h, &h1)
@@ -1508,8 +1517,10 @@ func TestRequestHeaderCopyTo(t *testing.T) {
 	}
 
 	// flush buf
-	h.bufKV = argsKV{}
-	h1.bufKV = argsKV{}
+	h.bufK = []byte{}
+	h.bufV = []byte{}
+	h1.bufK = []byte{}
+	h1.bufV = []byte{}
 
 	if !reflect.DeepEqual(&h, &h1) {
 		t.Fatalf("RequestHeaderCopyTo fail, src: \n%+v\ndst: \n%+v\n", &h, &h1)
@@ -1856,8 +1867,8 @@ func TestResponseHeaderAddTrailerError(t *testing.T) {
 	t.Parallel()
 
 	var h ResponseHeader
-	err := h.AddTrailer("Foo,   Content-Length , Bar,Transfer-Encoding,")
-	expectedTrailer := "Foo, Bar"
+	err := h.AddTrailer("Foo,   Content-Length , bAr,Transfer-Encoding, uSer aGent")
+	expectedTrailer := "Foo, Bar, uSer aGent"
 
 	if !errors.Is(err, ErrBadTrailer) {
 		t.Fatalf("unexpected err %q. Expected %q", err, ErrBadTrailer)
@@ -2547,6 +2558,10 @@ func TestResponseHeaderReadSuccess(t *testing.T) {
 	if !h.ConnectionClose() {
 		t.Fatalf("expecting connection: close for identity response")
 	}
+	// See https://github.com/valyala/fasthttp/issues/1909
+	if hasArg(h.h, HeaderTransferEncoding) {
+		t.Fatalf("unexpected header: 'Transfer-Encoding' should not be present in parsed headers")
+	}
 
 	// no content-type
 	testResponseHeaderReadSuccess(t, h, "HTTP/1.1 400 OK\r\nContent-Length: 123\r\n\r\nfoiaaa",
@@ -2961,6 +2976,8 @@ func verifyRequestHeader(t *testing.T, h *RequestHeader, expectedContentLength i
 }
 
 func verifyResponseTrailer(t *testing.T, h *ResponseHeader, expectedTrailers map[string]string) {
+	t.Helper()
+
 	for k, v := range expectedTrailers {
 		got := h.Peek(k)
 		if !bytes.Equal(got, []byte(v)) {
